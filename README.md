@@ -16,7 +16,7 @@
 
 - [x] Модели скачаны и сконвертированы, перевод в обе стороны проверен вручную (`scripts/translate-smoke-test.py`).
 - [x] Модели опубликованы в [Releases](../../releases) этого репозитория.
-- [ ] **Нативный рантайм под macOS.** Сейчас перевод проверен только через Python (`ctranslate2`+`sentencepiece`). Чтобы Утка могла вызывать это без Python и pip-пакетов на компьютере пользователя, нужно собрать CTranslate2 как C++-библиотеку под macOS (arm64 и x86_64, без Xcode — только Command Line Tools) и написать маленькую CLI-обёртку, которая принимает текст и отдаёт перевод. Это следующий шаг.
+- [x] **Нативный рантайм под macOS (arm64).** Свой CLI `utka-translate` (C++) на CTranslate2 + SentencePiece, без Python. Все зависимости (.dylib CTranslate2/SentencePiece/Abseil) упакованы рядом через `@rpath`, без единого абсолютного пути на Homebrew — проверено в окружении без Homebrew. Опубликовано в [Releases](../../releases/tag/v0.1.0-runtime-macos-arm64).
 - [ ] Подключение к самой Утке (`Translator.swift`) как приоритетного способа перевода, перед Apple и перед интернет-запасным.
 
 ## Как воспроизвести модели самому
@@ -32,3 +32,29 @@ python3 scripts/translate-smoke-test.py "Hello, how are you today?" en ru
 - Модели: OPUS-MT (Helsinki-NLP), [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Обучены на открытом корпусе [OPUS](https://opus.nlpl.eu/).
 - Движок: [CTranslate2](https://github.com/OpenNMT/CTranslate2), MIT.
 - Код в этом репозитории: MIT, как и в основном репозитории Утки.
+
+## Как собрать нативный рантайм самому
+
+Нужны Command Line Tools, `cmake` и Homebrew (`brew install cmake sentencepiece abseil`) — но только на машине, где собираешь. Утке для запуска готового бинарника из Releases ничего из этого не нужно.
+
+```bash
+git clone --depth 1 --recursive https://github.com/OpenNMT/CTranslate2.git ctranslate2-src
+cd ctranslate2-src && mkdir build && cd build
+cmake -DCMAKE_BUILD_TYPE=Release -DWITH_ACCELERATE=ON -DOPENMP_RUNTIME=NONE -DBUILD_CLI=OFF -DCMAKE_OSX_ARCHITECTURES=arm64 ..
+cmake --build . --config Release -j$(sysctl -n hw.ncpu)
+cd ../..
+
+clang++ -std=c++17 -O2 \
+  -I ctranslate2-src/include -I $(brew --prefix sentencepiece)/include -I $(brew --prefix abseil)/include \
+  -L ctranslate2-src/build -lctranslate2 \
+  -L $(brew --prefix sentencepiece)/lib -lsentencepiece \
+  -L $(brew --prefix abseil)/lib -labsl_status -labsl_statusor -labsl_cord -labsl_strings -labsl_base -labsl_raw_logging_internal \
+  -Wl,-rpath,@executable_path/lib \
+  runtime/utka-translate.cpp -o runtime/utka-translate
+
+cp ctranslate2-src/build/libctranslate2*.dylib runtime/
+bash scripts/bundle-dylibs.sh runtime/utka-translate
+codesign --force -s - runtime/lib/*.dylib runtime/utka-translate
+```
+
+Результат — `runtime/utka-translate` и `runtime/lib/*.dylib` рядом: самодостаточная пара, без Homebrew и Python на машине, где будет запускаться.
